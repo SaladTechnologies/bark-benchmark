@@ -1,8 +1,6 @@
 import { 
-  Text2ImageRequest, 
-  Text2ImageResponse, 
-  ServerStatus, 
-  SDJob, 
+  BarkJob,
+  BarkRequest,
   GetJobFromQueueResponse, 
   DeleteQueueMessageResponse 
 } from "./types";
@@ -10,14 +8,14 @@ import { exec } from "node:child_process";
 import os from "node:os";
 
 const {
-  SDNEXT_URL = "http://127.0.0.1:7860", 
+  SERVER_URL = "http://127.0.0.1:8000",
   BENCHMARK_SIZE = "10", 
   REPORTING_URL = "http://localhost:3000",
   REPORTING_AUTH_HEADER = "Benchmark-Api-Key",
   REPORTING_API_KEY = "abc1234567890",
-  BENCHMARK_ID = "test",
+  BENCHMARK_ID = "bark-test",
   QUEUE_URL = "http://localhost:3001",
-  QUEUE_NAME = "test",
+  QUEUE_NAME = "bark-test",
 } = process.env;
 
 const benchmarkSize = parseInt(BENCHMARK_SIZE, 10);
@@ -29,30 +27,9 @@ const benchmarkSize = parseInt(BENCHMARK_SIZE, 10);
  * You can change this to whatever you want, and there are a lot
  * of options. See the SDNext API docs for more info.
  */
-const testJob: Text2ImageRequest = {
-  prompt: "cat",
-
-  // We want to run the base model for 20 steps
-  steps: 20,
-  width: 1216,
-  height: 896,
-  send_images: true,
-  cfg_scale: 7,
-
-  /**
-   * We want to run the refiner for 15 steps, starting at step 20.
-   * This requires enabling high resolution, but setting the upscaler to "None".
-   *  */ 
-  enable_hr: true,
-  hr_upscaler: "None",
-  
-  /**
-   * The number of steps run by the refiner is, for some reason,
-   * equal to denoising_strength * hr_second_pass_steps.
-   */
-  refiner_start: 20,
-  denoising_strength: 0.43,
-  hr_second_pass_steps: 35,
+const testJob: BarkRequest = {
+  text: "This is a test",
+  voice_preset: "v2/en_speaker_6",
 };
 
 
@@ -91,10 +68,12 @@ function getSystemInfo() : { vCPU: number, MemGB: number } {
  * In this case, we're sending the results to our reporting server.
  */
 async function recordResult(result: {
-  prompt: string, 
-  id: string, 
+  recipe_id: number, 
+  script_section: string,
+  section_index: number, 
   inference_time: number, 
-  output_urls: string[], 
+  output_url: string,
+  voice: string | undefined,
   system_info: {
     vCPU: number,
     MemGB: number,
@@ -118,7 +97,7 @@ async function recordResult(result: {
  * 
  * @returns A job to submit to the server
  */
-async function getJob(): Promise<{request: Text2ImageRequest, messageId: string, uploadUrls: string[], jobId: string } | null> {
+async function getJob(): Promise<{request: BarkRequest, messageId: string, job: BarkJob } | null> {
   const url = new URL("/" + QUEUE_NAME, QUEUE_URL);
   const response = await fetch(url.toString(), {
     method: "GET",
@@ -128,35 +107,15 @@ async function getJob(): Promise<{request: Text2ImageRequest, messageId: string,
   });
   const queueMessage = await response.json() as GetJobFromQueueResponse;
   if (queueMessage.messages?.length) {
-    const job = JSON.parse(queueMessage.messages[0].body) as SDJob;
+    const job = JSON.parse(queueMessage.messages[0].body) as BarkJob;
 
     return {
-      /**
-       * We need to return the jobId so we can send it to the reporting server
-       * to identify the results of the job.
-       */
-      jobId: job.id,
-      /**
-       * We only take the prompt and batch size from the job.
-       * The rest of the job is set to the default values.
-       *  */ 
       request: {
-        ...testJob,
-        prompt: job.prompt,
-        batch_size: job.batch_size,
+        text: job.script_section,
+        voice_preset: job.voice,
       },
-
-      /**
-       * We need to return the messageId so we can delete the message
-       * from the queue when we're done with it.
-       */
       messageId: queueMessage.messages[0].messageId,
-
-      /**
-       * We need to return the signed upload urls so we can upload the images
-       * to s3 when we're done with them.
-       */
-      uploadUrls: job.upload_url,
+      job,
     };
 
   } else {
@@ -183,13 +142,13 @@ async function markJobComplete(messageId: string): Promise<DeleteQueueMessageRes
 }
 
 /**
- * Submits a job to the SDNext server and returns the response.
+ * Submits a job to the Bark server and returns the response.
  * @param job The job to submit to the server
  * @returns The response from the server
  */
-async function submitJob(job: Text2ImageRequest): Promise<Text2ImageResponse> {
-  // POST to SDNEXT_URL
-  const url = new URL("/sdapi/v1/txt2img", SDNEXT_URL);
+async function submitJob(job: BarkRequest): Promise<ArrayBuffer> {
+  // POST to /generate
+  const url = new URL("/generate", SERVER_URL);
   const response = await fetch(url.toString(), {
     method: "POST", 
     body: JSON.stringify(job),
@@ -198,23 +157,30 @@ async function submitJob(job: Text2ImageRequest): Promise<Text2ImageResponse> {
     },
   });
 
-  const json = await response.json();
-  return json as Text2ImageResponse;
+
+  if (!response.ok) {
+    throw new Error(`Error submitting job: ${response.status} ${response.statusText}\n${await response.text()}`);
+  }
+
+  const mp3 = await response.arrayBuffer();
+
+
+  return mp3;
 }
 
 /**
- * Uploads an image to s3 using the signed url provided by the job
+ * Uploads an audio clip to s3 using the signed url provided by the job
  * @param image The image to upload, base64 encoded
  * @param url The signed url to upload the image to
  * 
  * @returns The download url of the uploaded image
  */
-async function uploadImage(image: string, url: string): Promise<string> {
+async function uploadAudio(audio: ArrayBuffer, url: string): Promise<string> {
   await fetch(url, {
     method: "PUT",
-    body: Buffer.from(image, "base64"),
+    body: audio,
     headers: {
-      "Content-Type": "image/jpeg",
+      "Content-Type": "audio/mpeg",
     },
   });
 
@@ -226,39 +192,12 @@ async function uploadImage(image: string, url: string): Promise<string> {
  * Uses the status endpoint to get the status of the SDNext server.
  * @returns The status of the SDNext server
  */
-async function getServerStatus(): Promise<ServerStatus> {
-  const url = new URL("/sdapi/v1/system-info/status?state=true&memory=true&full=true&refresh=true", SDNEXT_URL);
+async function getServerStatus(): Promise<string> {
+  const url = new URL("/hc", SERVER_URL);
   const response = await fetch(url.toString());
-  const json = await response.json();
-  return json as ServerStatus;
-}
+  const text = await response.text();
 
-/**
- * Uses the log endpoint to get the last 5 lines of the SDNext server logs.
- * This is used to determine when the model has finished loading.
- * @returns The last 5 lines of the SDNext server logs
- */
-async function getSDNextLogs(): Promise<string[]> {
-  const url = new URL("/sdapi/v1/log?lines=5&clear=true", SDNEXT_URL);
-  const response = await fetch(url.toString());
-  const json = await response.json();
-  return json as string[];
-}
-
-/**
- * Enables the refiner model. This can take quite a while,
- * but must be done before inference can be run.
- */
-async function enableRefiner(): Promise<void> {
-  console.log("Enabling refiner...");
-  const url = new URL("/sdapi/v1/options", SDNEXT_URL);
-  await fetch(url.toString(), {
-    method: "POST",
-    body: JSON.stringify({"sd_model_refiner": "refiner/sd_xl_refiner_1.0.safetensors"}),
-    headers: {
-      "Content-Type": "application/json"
-    },
-  });
+  return text;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -296,41 +235,6 @@ async function waitForServerToStart(): Promise<void> {
 }
 
 /**
- * Waits for the SDNext server to finish loading the model.
- * This is done by checking the logs for the "Startup time:" line.
- */
-async function waitForModelToLoad(): Promise<void> {
-  const maxAttempts = 300;
-  const maxFailures = 10;
-  let attempts = 0;
-  let failures = 0;
-  while (stayAlive && attempts++ < maxAttempts) {
-    try {
-      const logLines = await getSDNextLogs();
-      if (logLines.some((line) => line.includes("Startup time:"))) {
-        return;
-      } else if (logLines.length > 0) {
-        // prettyPrint(logLines);
-      }
-        
-      console.log(`(${attempts}/${maxAttempts}) Waiting for model to load...`);
-    } catch(e: any) {
-      
-      failures++;
-      if (failures > maxFailures) {
-        throw e;
-      }
-      console.log(`(${failures}/${maxFailures}) Request failed. Retrying...`);
-    }
-    
-    await sleep(1000);
-  }
-  throw new Error("Timed out waiting for model to load");
-}
-
-
-
-/**
  * This is a helper function to pretty print an object,
  * useful for debugging.
  * @param obj The object to pretty print
@@ -358,8 +262,6 @@ async function main(): Promise<void> {
    * It can take several minutes.
    */
   await waitForServerToStart();
-  await waitForModelToLoad();
-  await enableRefiner();
 
   /**
    * We run a single job to verify that everything is working.
@@ -370,9 +272,9 @@ async function main(): Promise<void> {
   const loadElapsed = loadEnd - loadStart;
   console.log(`Server fully warm in ${loadElapsed}ms`);
 
-  let numImages = 0;
+  let numClips = 0;
   const start = Date.now();
-  while (stayAlive && (benchmarkSize < 0 || numImages < benchmarkSize)) {
+  while (stayAlive && (benchmarkSize < 0 || numClips < benchmarkSize)) {
     console.log("Fetching Job...");
     const job = await getJob();
 
@@ -382,43 +284,43 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const { request, messageId, uploadUrls, jobId } = job;
+    const { request, messageId, job: rawJob } = job;
 
     console.log("Submitting Job...");
     const jobStart = Date.now();
     response = await submitJob(request);
     const jobEnd = Date.now();
     const jobElapsed = jobEnd - jobStart;
-    console.log(`${response.images.length} images generated in ${jobElapsed}ms`);
+    console.log(`Clip generated in ${jobElapsed}ms`);
     
-    numImages += response.images.length;
+    numClips += 1;
 
     /**
      * By not awaiting this, we can get started on the next job
-     * while the images are uploading.
+     * while the clips are uploading.
      */
-    Promise.all(response.images.map((image, i) => {
-      return uploadImage(image, uploadUrls[i]);
-    })).then(async (downloadUrls) => {
-      await recordResult({
-        id: jobId,
-        prompt: request.prompt,
-        inference_time: jobElapsed,
-        output_urls: downloadUrls,
-        system_info: systemInfo
+    uploadAudio(response, rawJob.upload_url)
+      .then(async (downloadUrl) => {
+        await recordResult({
+          recipe_id: rawJob.id,
+          script_section: request.text,
+          section_index: rawJob.section_index,
+          output_url: downloadUrl,
+          voice: request.voice_preset,
+          inference_time: jobElapsed,
+          system_info: systemInfo
+        });
+        return downloadUrl;
+      }).then((downloadUrl) => {
+        markJobComplete(messageId);
+        prettyPrint({text: request.text, inference_time: jobElapsed, output_url: downloadUrl});
       });
-      return downloadUrls;
-    }).then((downloadUrls) => {
-      markJobComplete(messageId);
-      prettyPrint({prompt: request.prompt, inference_time: jobElapsed, output_urls: downloadUrls});
-    });
   }
-
   const end = Date.now();
   const elapsed = end - start;
   if (benchmarkSize > 0) {
-    console.log(`Generated ${numImages} images in ${elapsed}ms`);
-    console.log(`Average time per image: ${elapsed / numImages}ms`);
+    console.log(`Generated ${numClips} images in ${elapsed}ms`);
+    console.log(`Average time per image: ${elapsed / numClips}ms`);
   }
 }
 

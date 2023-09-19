@@ -1,6 +1,6 @@
-# sdnext-benchmark
+# bark-benchmark
 
-This project provides a pattern for creating benchmarks with an sdnext container. This example uses a preconfigured [Stable Diffusion XL 1.0 image](https://hub.docker.com/r/saladtechnologies/sdnext-sdxl10).
+This project benchmarks the performance of the Bark model, using a preconfigured [Bark image](https://hub.docker.com/r/saladtechnologies/bark).
 
 ## Getting Started
 
@@ -8,11 +8,11 @@ To get started with this project, you will need to have Docker installed on your
 
 ```bash
 docker run --gpus all \
--e BENCHMARK_SIZE=10 \
+-e BENCHMARK_SIZE=-1 \
 -e REPORTING_URL=https://someurl.com \
 -e REPORTING_API_KEY=1234567890 \
--e BENCHMARK_ID=sdxl-benchmark-0 \
-saladtechnologies/sdxl-benchmark:latest
+-e BENCHMARK_ID=bark-benchmark-0 \
+saladtechnologies/bark-benchmark:latest
 ```
 
 or
@@ -29,7 +29,7 @@ To build the image, run the following command:
 
 ```bash
 docker buildx build \
--t saladtechnologies/sdxl-benchmark:latest \
+-t saladtechnologies/bark-benchmark:latest \
 --provenance=false \
 --output type=docker \
 .

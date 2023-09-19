@@ -18,14 +18,14 @@ RUN npm run build
 RUN npx pkg -t node18-linux-x64 --out-path ./benchmark-worker .
 
 # Rebase the image to the inference server image
-FROM saladtechnologies/sdnext-sdxl10:latest
+FROM saladtechnologies/bark:latest
 
 # And then copy the benchmark worker into the inference image
 COPY --from=build /app/benchmark-worker ./benchmark-worker
 
 # The inference image supports
 ENV HOST='127.0.0.1'
-ENV PORT=7860
+ENV PORT=8000
 
 # Override the entrypoint, as we need to launch a little differently in this context
 ENTRYPOINT []
@@ -35,14 +35,5 @@ ENTRYPOINT []
 CMD [\
   "/bin/bash",\
   "-c",\
-  "${INSTALLDIR}/entrypoint.sh \
-  --listen \
-  --no-download \
-  --backend diffusers \
-  --use-cuda \
-  --ckpt ${CKPT} \
-  --docs \
-  --quick \
-  --server-name ${HOST} \
-  --port ${PORT} \
-  & benchmark-worker/sdnext-benchmark"]
+  "python api.py \
+  & benchmark-worker/bark-benchmark"]

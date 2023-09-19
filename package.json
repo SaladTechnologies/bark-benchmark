@@ -2,7 +2,7 @@
   "author": "Shawn Rushefsky",
   "bin": "./dist/index.js",
   "bugs": {
-    "url": "https://github.com/SaladTechnologies/sdnext-benchmark/issues"
+    "url": "https://github.com/SaladTechnologies/bark-benchmark/issues"
   },
   "description": "A benchmarking utility to be used with the sdnext container",
   "devDependencies": {
@@ -13,17 +13,17 @@
     "prettier": "^3.0.1",
     "typescript": "^5.1.6"
   },
-  "homepage": "https://github.com/SaladTechnologies/sdnext-benchmark#readme",
+  "homepage": "https://github.com/SaladTechnologies/bark-benchmark#readme",
   "keywords": [
     "sdenext",
     "benchmark"
   ],
   "license": "UNLICENSED",
   "main": "dist/src/index.js",
-  "name": "sdnext-benchmark",
+  "name": "bark-benchmark",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SaladTechnologies/sdnext-benchmark.git"
+    "url": "git+https://github.com/SaladTechnologies/bark-benchmark.git"
   },
   "scripts": {
     "build": "tsc",
