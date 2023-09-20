@@ -136,6 +136,10 @@ async function markJobComplete(messageId: string): Promise<DeleteQueueMessageRes
       [REPORTING_AUTH_HEADER]: REPORTING_API_KEY,
     },
   });
+
+  if (!response.ok) {
+    throw new Error(`Error deleting message: ${response.status} ${response.statusText}\n${await response.text()}`);
+  }
   const json = await response.json() as DeleteQueueMessageResponse;
 
   return json;
@@ -176,13 +180,17 @@ async function submitJob(job: BarkRequest): Promise<ArrayBuffer> {
  * @returns The download url of the uploaded image
  */
 async function uploadAudio(audio: ArrayBuffer, url: string): Promise<string> {
-  await fetch(url, {
+  const response = await fetch(url, {
     method: "PUT",
     body: audio,
     headers: {
       "Content-Type": "audio/mpeg",
     },
   });
+
+  if (!response.ok) {
+    throw new Error(`Error uploading audio: ${response.status} ${response.statusText}\n${await response.text()}`);
+  }
 
   // Return the full url, minus the query string
   return url.split("?")[0];
@@ -195,7 +203,12 @@ async function uploadAudio(audio: ArrayBuffer, url: string): Promise<string> {
 async function getServerStatus(): Promise<string> {
   const url = new URL("/hc", SERVER_URL);
   const response = await fetch(url.toString());
+
+
   const text = await response.text();
+  if (response.status !== 200) {
+    throw new Error(`Error getting server status: ${response.status} ${response.statusText}\n${text}`);
+  }
 
   return text;
 }
@@ -299,22 +312,21 @@ async function main(): Promise<void> {
      * By not awaiting this, we can get started on the next job
      * while the clips are uploading.
      */
-    uploadAudio(response, rawJob.upload_url)
-      .then(async (downloadUrl) => {
-        await recordResult({
-          recipe_id: rawJob.id,
-          script_section: request.text,
-          section_index: rawJob.section_index,
-          output_url: downloadUrl,
-          voice: request.voice_preset,
-          inference_time: jobElapsed,
-          system_info: systemInfo
-        });
-        return downloadUrl;
-      }).then((downloadUrl) => {
-        markJobComplete(messageId);
-        prettyPrint({text: request.text, inference_time: jobElapsed, output_url: downloadUrl});
+    const finishIt = async () => {
+      const downloadUrl = await uploadAudio(response, rawJob.upload_url);
+      await recordResult({
+        recipe_id: rawJob.id,
+        script_section: request.text,
+        section_index: rawJob.section_index,
+        output_url: downloadUrl,
+        voice: request.voice_preset,
+        inference_time: jobElapsed,
+        system_info: systemInfo
       });
+      await markJobComplete(messageId);
+      prettyPrint({text: request.text, inference_time: jobElapsed, output_url: downloadUrl});
+    };
+    finishIt();
   }
   const end = Date.now();
   const elapsed = end - start;
